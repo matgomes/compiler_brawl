@@ -11,7 +11,7 @@ main(Input) ->
 
 eval(#{<<"kind">> := <<"Print">>, <<"value">> := Value}, Env) ->
     Data = eval(Value, Env),
-    io:format("~p~n", [to_string(Data)]), %% TODO FIX PRINT
+    io:format("~s~n", [to_string(Data)]),
     Data;
 
 eval(#{<<"kind">> := <<"Str">>, <<"value">> := Value}, _) ->
@@ -23,8 +23,8 @@ eval(#{<<"kind">> := <<"Bool">>, <<"value">> := Value}, _) ->
 eval(#{<<"kind">> := <<"Int">>, <<"value">> := Value}, _) ->
     Value;
 
-eval(#{<<"kind">> := <<"Tuple">>} = Term, _) ->
-    Term;
+eval(#{<<"kind">> := <<"Tuple">>, <<"first">> := First, <<"second">> := Second}, Env) ->
+    {tuple, {eval(First, Env), eval(Second, Env)}};
 
 eval(#{<<"kind">> := <<"Let">>, <<"value">> := Value, <<"name">> := Name, <<"next">> := Next}, Env) ->
     EvaluatedValue = eval(Value, Env),
@@ -36,10 +36,10 @@ eval(#{<<"kind">> := <<"Var">>, <<"text">> := Text}, Env) ->
     eval(maps:get(Text, Env), Env);
 
 eval(#{<<"kind">> := <<"Function">>, <<"parameters">> := Params, <<"value">> := Value}, _) ->
-    {Params, Value};
+    {func, {Params, Value}};
 
 eval(#{<<"kind">> := <<"Call">>, <<"callee">> := Callee, <<"arguments">> := Arguments}, Env) ->
-    {Params, Value} = eval(Callee, Env),
+    {func, {Params, Value}} = eval(Callee, Env),
 
     ParamsArgumentsTuples =
         lists:zipwith(fun(#{<<"text">> := Text}, Args) -> {Text, Args} end, Params, Arguments),
@@ -48,7 +48,12 @@ eval(#{<<"kind">> := <<"Call">>, <<"callee">> := Callee, <<"arguments">> := Argu
                     #{},
                     ParamsArgumentsTuples),
 
-    memoize(fun eval/2, [Value, maps:merge(Env, NewEnv)], {maps:get(<<"text">>, Callee), NewEnv});
+    case maps:find(<<"text">>, Callee) of
+        {ok, Text} ->
+            memoize(fun eval/2, [Value, maps:merge(Env, NewEnv)], {Text, NewEnv});
+        error ->
+            eval(Value, maps:merge(Env, NewEnv))
+    end;
 
 eval(#{<<"kind">> := <<"If">>, <<"condition">> := Condition, <<"then">> := Then, <<"otherwise">> := Otherwise}, Env) ->
     ConditionResult = eval(Condition, Env),
@@ -67,36 +72,37 @@ eval(#{<<"kind">> := <<"Second">>, <<"value">> := Value}, Env) ->
 eval(#{<<"kind">> := <<"Binary">>, <<"lhs">> := Lhs, <<"rhs">> := Rhs, <<"op">> := Op}, Env) ->
     LhsValue = eval(Lhs, Env),
     RhsValue = eval(Rhs, Env),
-    Result =
-        case Op of
-            <<"Add">> -> sum(LhsValue, RhsValue);
-            <<"Sub">> -> LhsValue - RhsValue;
-            <<"Mul">> -> LhsValue * RhsValue;
-            <<"Div">> -> LhsValue / RhsValue;
-            <<"Rem">> -> LhsValue rem RhsValue;
-            <<"Eq">>  -> LhsValue == RhsValue;
-            <<"Neq">> -> LhsValue /= RhsValue;
-            <<"Lt">>  -> LhsValue < RhsValue;
-            <<"Gt">>  -> LhsValue > RhsValue;
-            <<"Lte">> -> LhsValue =< RhsValue;
-            <<"Gte">> -> LhsValue >= RhsValue;
-            <<"And">> -> LhsValue andalso RhsValue;
-            <<"Or">>  -> LhsValue orelse RhsValue
-        end,
-    if is_number(Result) -> trunc(Result);
-       true -> Result
+    case Op of
+        <<"Add">> -> sum(LhsValue, RhsValue);
+        <<"Sub">> -> LhsValue - RhsValue;
+        <<"Mul">> -> LhsValue * RhsValue;
+        <<"Div">> -> LhsValue / RhsValue;
+        <<"Rem">> -> LhsValue rem RhsValue;
+        <<"Eq">>  -> LhsValue == RhsValue;
+        <<"Neq">> -> LhsValue /= RhsValue;
+        <<"Lt">>  -> LhsValue < RhsValue;
+        <<"Gt">>  -> LhsValue > RhsValue;
+        <<"Lte">> -> LhsValue =< RhsValue;
+        <<"Gte">> -> LhsValue >= RhsValue;
+        <<"And">> -> LhsValue andalso RhsValue;
+        <<"Or">>  -> LhsValue orelse RhsValue
     end;
 
 eval(V, _) -> V.
 
-sum(A, B) when is_number(A) and is_number(B) ->
-    A + B;
+sum(A, B) when is_number(A) and is_number(B) -> A + B;
 
 sum(A, B) ->
     String = lists:concat([to_string(A), to_string(B)]),
     list_to_binary(String).
 
 to_string(Term) when is_binary(Term) -> binary_to_list(Term);
+to_string(Term) when is_number(Term) -> integer_to_list(trunc(Term));
+to_string({func, _}) -> "<#closure>";
+
+to_string({tuple, {First, Second}}) ->
+    lists:concat(["(", to_string(First), ", ", to_string(Second), ")"]);
+
 to_string(Term) -> Term.
 
 memoize(Func, Args, Key) ->
